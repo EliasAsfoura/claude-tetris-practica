@@ -93,9 +93,12 @@ jobs:
                Nunca publiques un segundo comentario de diagnóstico duplicado.
 
             6. El comentario (guarda el contenido en un archivo temporal antes
-               de usarlo con --body-file / -f body=@) debe empezar con la línea
-               `<!-- claude-triage -->` (oculta) y luego, en español, tener
-               exactamente estas secciones en este orden:
+               de usarlo con --body-file / -f body=@) debe estar en formato
+               Markdown válido que GitHub pueda renderizar correctamente
+               (encabezados `##`, negritas `**...**`, listas, bloques de código
+               con backticks, etc.), empezar con la línea `<!-- claude-triage -->`
+               (oculta) y luego, en español, tener exactamente estas secciones
+               en este orden:
 
                ## 🔍 Diagnóstico automático
 
