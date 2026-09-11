@@ -75,6 +75,10 @@ const GRID_COLORS = { dark: '#22222e', light: '#d8dae6' };
 const THEME_KEY = 'tetris-theme';
 
 let board, current, next, score, lines, level, paused, gameOver, lastTime, dropAccum, dropInterval, animId;
+// Consecutive line-clearing locks, and the best streak of the current game.
+let combo = 0, maxCombo = 0;
+// The game no longer boots on load: it waits for the start screen's play button.
+let started = false;
 let gridColor = GRID_COLORS.dark;
 
 function createBoard() {
@@ -167,9 +171,12 @@ function clearLines() {
     score += (LINE_SCORES[cleared] || 0) * level;
     level = Math.floor(lines / 10) + 1;
     dropInterval = Math.max(100, 1000 - (level - 1) * 90);
+    combo++;
+    if (combo > maxCombo) maxCombo = combo;
     if (cleared === 4) pendingRewardType = TETRIS_REWARD_TYPE; // Tetris reward: next piece is the 1x1
     updateHUD();
   }
+  return cleared;
 }
 
 function ghostY() {
@@ -197,7 +204,8 @@ function softDrop() {
 
 function lockPiece() {
   merge();
-  clearLines();
+  // A lock that clears nothing breaks the combo streak.
+  if (!clearLines()) combo = 0;
   spawn();
 }
 
@@ -281,6 +289,186 @@ function drawNext() {
       drawBlock(nextCtx, offX + c, offY + r, shape[r][c], NB);
 }
 
+// --- Highscores DOM ---
+const startScreen = document.getElementById('start-screen');
+const startHighscores = document.getElementById('start-highscores');
+const startBests = document.getElementById('start-bests');
+const startBtn = document.getElementById('start-btn');
+const resetScoresBtn = document.getElementById('reset-scores-btn');
+const overlayResetBtn = document.getElementById('overlay-reset-btn');
+const highscoresList = document.getElementById('highscores-list');
+const overlayBests = document.getElementById('overlay-bests');
+const highscoreForm = document.getElementById('highscore-form');
+const highscoreName = document.getElementById('highscore-name');
+const highscoreSaveBtn = document.getElementById('highscore-save');
+
+// --- Highscores ---
+const HIGHSCORES_KEY = 'tetris-highscores';
+const MAX_HIGHSCORES = 5;
+const MAX_NAME_LENGTH = 12;
+const DEFAULT_NAME = 'Anónimo';
+
+// Finished game waiting for the player to type a name, or null.
+let pendingEntry = null;
+
+function toCount(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : fallback;
+}
+
+// Stored JSON can be corrupt or written by an older version, so every field
+// is validated instead of trusted. Any failure falls back to an empty table.
+function loadHighscores() {
+  let raw;
+  try {
+    raw = JSON.parse(localStorage.getItem(HIGHSCORES_KEY));
+  } catch (e) {
+    return [];
+  }
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter(e => e && typeof e === 'object')
+    .map(e => ({
+      name: String(e.name ?? DEFAULT_NAME).slice(0, MAX_NAME_LENGTH) || DEFAULT_NAME,
+      score: toCount(e.score, 0),
+      lines: toCount(e.lines, 0),
+      level: toCount(e.level, 1),
+      combo: toCount(e.combo, 0),
+      date: typeof e.date === 'string' ? e.date : '',
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, MAX_HIGHSCORES);
+}
+
+function saveHighscores(list) {
+  try {
+    localStorage.setItem(HIGHSCORES_KEY, JSON.stringify(list));
+  } catch (e) {
+    // Private mode or quota exceeded: the table just stays in memory.
+  }
+}
+
+function qualifiesForTop(value, list) {
+  return value > 0 && (list.length < MAX_HIGHSCORES || value > list[MAX_HIGHSCORES - 1].score);
+}
+
+function highscoreRow(entry, rank, isNew) {
+  const li = document.createElement('li');
+  li.className = isNew ? 'hs-row is-new' : 'hs-row';
+  const cells = [
+    ['hs-rank', `${rank}.`],
+    ['hs-name', entry.name],
+    ['hs-score', entry.score.toLocaleString()],
+    ['hs-detail', `${entry.lines} L`],
+    ['hs-detail', `x${entry.combo}`],
+  ];
+  for (const [className, text] of cells) {
+    const span = document.createElement('span');
+    span.className = className;
+    // textContent, never innerHTML: the name is player input.
+    span.textContent = text;
+    li.appendChild(span);
+  }
+  return li;
+}
+
+function renderHighscores(listEl, entries, highlightIndex) {
+  listEl.textContent = '';
+  if (!entries.length) {
+    const li = document.createElement('li');
+    li.className = 'hs-empty';
+    li.textContent = 'Aún no hay records';
+    listEl.appendChild(li);
+    return;
+  }
+  entries.forEach((entry, i) => {
+    listEl.appendChild(highscoreRow(entry, i + 1, i === highlightIndex));
+  });
+}
+
+// Bests are derived from the stored table, so they describe the top 5 and not
+// every game ever played. The label says so to stay honest: an entry pushed
+// out of the table takes its combo and lines with it.
+function renderBests(el, entries) {
+  if (!entries.length) {
+    el.textContent = 'Mejor combo del top: — · Líneas máximas del top: —';
+    return;
+  }
+  const bestCombo = entries.reduce((max, e) => Math.max(max, e.combo), 0);
+  const bestLines = entries.reduce((max, e) => Math.max(max, e.lines), 0);
+  el.textContent = `Mejor combo del top: x${bestCombo} · Líneas máximas del top: ${bestLines}`;
+}
+
+function renderStartScreen() {
+  const entries = loadHighscores();
+  renderHighscores(startHighscores, entries, -1);
+  renderBests(startBests, entries);
+}
+
+// Clears anything left over from a previous game over, so the PAUSA overlay
+// (which reuses #overlay) never shows a stale table.
+function resetHighscoreOverlay() {
+  pendingEntry = null;
+  highscoreForm.classList.add('hidden');
+  overlayResetBtn.classList.add('hidden');
+  highscoresList.textContent = '';
+  overlayBests.textContent = '';
+}
+
+function maybeSaveHighscore() {
+  const entries = loadHighscores();
+  pendingEntry = { score, lines, level, combo: maxCombo, date: new Date().toISOString() };
+  renderHighscores(highscoresList, entries, -1);
+  renderBests(overlayBests, entries);
+  overlayResetBtn.classList.remove('hidden');
+  if (qualifiesForTop(score, entries)) {
+    highscoreName.value = '';
+    highscoreForm.classList.remove('hidden');
+    highscoreName.focus();
+  } else {
+    pendingEntry = null;
+    highscoreForm.classList.add('hidden');
+  }
+}
+
+function saveHighscoreEntry() {
+  if (!pendingEntry) return;
+  const name = highscoreName.value.trim().slice(0, MAX_NAME_LENGTH) || DEFAULT_NAME;
+  const entry = { ...pendingEntry, name };
+  pendingEntry = null;
+  highscoreForm.classList.add('hidden');
+  // Reload first so a table saved from another tab is not overwritten. That
+  // also means the score may no longer qualify, in which case nothing is
+  // written and the player just sees the current table.
+  const entries = loadHighscores();
+  if (!qualifiesForTop(entry.score, entries)) {
+    renderHighscores(highscoresList, entries, -1);
+    renderBests(overlayBests, entries);
+    return;
+  }
+  entries.push(entry);
+  entries.sort((a, b) => b.score - a.score);
+  const top = entries.slice(0, MAX_HIGHSCORES);
+  saveHighscores(top);
+  renderHighscores(highscoresList, top, top.indexOf(entry));
+  renderBests(overlayBests, top);
+  renderStartScreen();
+}
+
+function resetHighscores() {
+  if (!confirm('¿Seguro que quieres borrar todos los records?')) return;
+  try {
+    localStorage.removeItem(HIGHSCORES_KEY);
+  } catch (e) {
+    // Nothing to do: the table is rendered from storage anyway.
+  }
+  renderStartScreen();
+  if (!overlay.classList.contains('hidden')) {
+    renderHighscores(highscoresList, [], -1);
+    renderBests(overlayBests, []);
+  }
+}
+
 function endGame() {
   gameOver = true;
   cancelAnimationFrame(animId);
@@ -289,6 +477,8 @@ function endGame() {
   overlayTitle.textContent = 'GAME OVER';
   overlayScore.textContent = `Puntuación: ${score.toLocaleString()}`;
   overlay.classList.remove('hidden');
+  // After unhiding: focusing the name field only works once it's displayed.
+  maybeSaveHighscore();
 }
 
 function togglePause() {
@@ -335,6 +525,10 @@ function init() {
   dropInterval = 1000;
   dropAccum = 0;
   pendingRewardType = null;
+  combo = 0;
+  maxCombo = 0;
+  started = true;
+  resetHighscoreOverlay();
   lastTime = performance.now();
   next = randomPiece();
   spawn();
@@ -344,6 +538,11 @@ function init() {
 }
 
 document.addEventListener('keydown', e => {
+  // Typing the highscore name must not drive the game. Matched by identity:
+  // #theme-toggle is an <input> too and stays focused after being clicked.
+  if (e.target === highscoreName) return;
+  // Before the first game there is no piece or board to act on.
+  if (!started) return;
   if (e.code === 'KeyP') { togglePause(); return; }
   if (paused || gameOver) return;
   switch (e.code) {
@@ -383,4 +582,20 @@ themeToggle.addEventListener('change', () => {
 
 applyTheme(localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark');
 
-init();
+startBtn.addEventListener('click', () => {
+  startScreen.classList.add('hidden');
+  init();
+});
+
+resetScoresBtn.addEventListener('click', resetHighscores);
+overlayResetBtn.addEventListener('click', resetHighscores);
+highscoreSaveBtn.addEventListener('click', saveHighscoreEntry);
+highscoreName.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    saveHighscoreEntry();
+  }
+});
+
+// The game starts from the start screen, not on load.
+renderStartScreen();
