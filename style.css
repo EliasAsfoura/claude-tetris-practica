@@ -237,3 +237,45 @@ kbd {
 #restart-btn:hover {
   background: var(--accent-hover);
 }
+
+/* ---- Skins ---- */
+.skin-select {
+  width: 100%;
+  background: var(--kbd-bg);
+  border: 1px solid var(--kbd-border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 5px 6px;
+  cursor: pointer;
+}
+
+.skin-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+body[data-skin="neon"] #board,
+body[data-skin="neon"] #next-canvas {
+  background: #05060a;
+  border-color: #1b2430;
+}
+
+body[data-skin="neon"] .game-title {
+  text-shadow: 0 0 10px currentColor, 0 0 26px currentColor;
+}
+
+body[data-skin="pastel"] #board,
+body[data-skin="pastel"] #next-canvas {
+  background: #fdfbff;
+  border-color: #e2ddee;
+  border-radius: 10px;
+}
+
+body[data-skin="pixel"] #board,
+body[data-skin="pixel"] #next-canvas {
+  background: #101018;
+  border-color: #3a3a52;
+  border-radius: 0;
+}
